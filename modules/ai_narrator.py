@@ -1,50 +1,43 @@
 """
-Módulo de Narración con IA — ADIC Platform Procaps
-Privacidad: solo envía estadísticas agregadas a Claude API, nunca registros individuales.
+Módulo de Narración con IA — ADIC Platform
+Usa la API de Claude para generar análisis ejecutivos en lenguaje natural.
 """
 
 from __future__ import annotations
 
 import os
 import pandas as pd
+import anthropic
 
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 
 
 def _build_data_summary(df: pd.DataFrame) -> str:
-    """
-    Construye resumen estadístico AGREGADO para enviar a Claude.
-    NUNCA incluye registros individuales ni datos personales identificables.
-    """
+    """Construye un resumen estadístico del DataFrame para enviar a Claude."""
     lines = []
-    lines.append(f"Total de registros: {len(df):,} | Columnas: {len(df.columns)}")
-    lines.append(f"Columnas disponibles: {', '.join(df.columns.tolist()[:15])}")
+    lines.append(f"Total de registros: {len(df):,} | Total de columnas: {len(df.columns)}")
 
     num_cols = df.select_dtypes(include="number").columns.tolist()
     if num_cols:
-        lines.append("\nResumen estadístico (variables numéricas):")
-        for col in num_cols[:10]:
+        lines.append("\nVariables numéricas:")
+        for col in num_cols[:8]:
             s = df[col].dropna()
             if len(s) == 0:
                 continue
             lines.append(
-                f"  • {col}: total={s.sum():,.0f} | promedio={s.mean():,.1f} | "
-                f"mín={s.min():,.1f} | máx={s.max():,.1f} | desv_est={s.std():,.1f}"
+                f"  • {col}: total = {s.sum():,.2f} | "
+                f"promedio = {s.mean():,.2f} | "
+                f"mínimo = {s.min():,.2f} | "
+                f"máximo = {s.max():,.2f}"
             )
 
     cat_cols = df.select_dtypes(include="object").columns.tolist()
     if cat_cols:
-        lines.append("\nDistribución de categorías:")
-        for col in cat_cols[:6]:
-            top = df[col].value_counts().head(5)
-            items = ", ".join(f"{k}: {v} registros" for k, v in top.items())
+        lines.append("\nVariables categóricas (top 3 valores más frecuentes):")
+        for col in cat_cols[:5]:
+            top = df[col].value_counts().head(3)
+            items = ", ".join(f"{k} ({v} registros)" for k, v in top.items())
             lines.append(f"  • {col}: {items}")
-
-    # Fechas si hay
-    date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    if date_cols:
-        dc = date_cols[0]
-        lines.append(f"\nRango temporal ({dc}): {df[dc].min().date()} → {df[dc].max().date()}")
 
     return "\n".join(lines)
 
@@ -53,69 +46,71 @@ def generate_narrative(
     df: pd.DataFrame,
     source_name: str,
     quality_score: float,
-    report_type: str = "General",
     extra_context: str = "",
 ) -> str:
     """
-    Genera narración ejecutiva usando Claude API.
-    Solo envía estadísticas agregadas, nunca datos individuales.
+    Llama a la API de Claude y retorna una narración ejecutiva en español.
+    Requiere ANTHROPIC_API_KEY en variables de entorno o secrets de Streamlit.
     """
-    api_key = _get_api_key()
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or _get_streamlit_secret()
 
     if not api_key:
         return (
-            "⚠️ **API Key no configurada.**\n\n"
-            "Para activar el asistente de IA:\n"
-            "1. Obtén tu clave en [console.anthropic.com](https://console.anthropic.com)\n"
-            "2. En Streamlit Cloud: ve a **Settings → Secrets** y añade:\n"
-            "```toml\nANTHROPIC_API_KEY = 'sk-ant-tu-clave'\n```\n"
-            "3. En local: crea el archivo `.streamlit/secrets.toml` con la misma línea.\n\n"
-            "> 🔒 La clave nunca se comparte con otros usuarios ni se almacena en el código."
+            "⚠️ **API Key no configurada.** Para activar la narración con IA, "
+            "añade `ANTHROPIC_API_KEY` en los Secrets de tu app en Streamlit Cloud "
+            "(Settings → Secrets).\n\n"
+            "```toml\nANTHROPIC_API_KEY = 'sk-ant-...'\n```"
         )
 
     summary = _build_data_summary(df)
 
-    system_prompt = f"""Eres el asistente analítico interno de Procaps, empresa farmacéutica colombiana líder.
-Tu función es generar análisis ejecutivos claros, precisos y accionables en español colombiano.
+    system_prompt = """Eres el analista ejecutivo de ADIC Platform, una plataforma de inteligencia \
+de negocios para empresas latinoamericanas. Tu función es generar informes ejecutivos \
+impecables en español, con redacción profesional, ortografía perfecta y presentación clara.
 
-CONTEXTO ORGANIZACIONAL: Procaps es una empresa farmacéutica con operaciones en producción, ventas, 
-RRHH, finanzas y logística. Los reportes son para toma de decisiones internas.
+REGLAS DE REDACCIÓN OBLIGATORIAS:
+- Escribe siempre con tildes correctas: análisis, período, métricas, número, según, también, así, más, sección, información, etc.
+- Usa signos de puntuación correctos: comas, puntos, signos de apertura ¿¡ cuando corresponda.
+- Nunca uses mayúsculas innecesarias ni abreviaciones informales.
+- Redacta en tercera persona o en voz impersonal, como un informe corporativo formal.
+- Los números mayores a mil se escriben con separador de miles (ejemplo: 1.250.000).
+- Usa el símbolo $ seguido del valor cuando hables de dinero, y aclara la moneda si aplica.
 
-PRIVACIDAD: Solo tienes acceso a estadísticas agregadas, nunca a datos individuales identificables.
+ESTRUCTURA OBLIGATORIA DE TU RESPUESTA (usa exactamente estos encabezados):
 
-Tu respuesta DEBE seguir EXACTAMENTE esta estructura en markdown:
+## Resumen General
+Describe en 2 o 3 oraciones el estado general del conjunto de datos analizado. \
+Menciona el volumen de información y la calidad de los datos.
 
-## 📊 ¿Qué muestran los datos?
-2-3 oraciones describiendo el panorama general con números concretos.
+## Hallazgos Principales
+Lista entre 3 y 4 hallazgos concretos y relevantes, con cifras específicas extraídas \
+de los datos. Cada hallazgo debe comenzar con un guion y ocupar máximo 2 líneas.
 
-## 🔍 Hallazgos principales
-3-4 hallazgos específicos con cifras. Cada uno en bullet point.
+## Puntos de Atención
+Identifica entre 1 y 2 situaciones que requieren seguimiento o presentan riesgo. \
+Sé específico y objetivo, sin alarmar innecesariamente.
 
-## ⚠️ Puntos de atención
-1-2 situaciones que requieren seguimiento o acción. Sé directo.
-
-## ✅ Recomendación ejecutiva
-Una acción concreta y prioritaria que el equipo puede tomar esta semana.
+## Recomendación Ejecutiva
+Una sola recomendación concreta, accionable y priorizada, redactada como si fuera \
+para el gerente general de la empresa. Máximo 3 oraciones.
 
 ---
-Tipo de reporte: {report_type}
-Calidad de datos: {quality_score}/100 {"(datos confiables)" if quality_score >= 75 else "(revisar calidad antes de decidir)"}
-"""
+IMPORTANTE: No inventes datos que no estén en el resumen estadístico. \
+Si algo no es calculable con los datos disponibles, omítelo."""
 
-    user_prompt = f"""Analiza este dataset de Procaps y genera el reporte ejecutivo.
+    user_prompt = f"""Genera el informe ejecutivo con base en la siguiente información.
 
-Fuente: {source_name}
-Tipo: {report_type}
+Fuente de datos: {source_name}
+Puntaje de calidad de datos: {quality_score}/100
 
-DATOS (solo estadísticas agregadas — sin información personal):
+Estadísticas del conjunto de datos:
 {summary}
 
-Contexto adicional del usuario: {extra_context or 'No especificado.'}
+Contexto adicional proporcionado por el usuario: {extra_context if extra_context else 'No se proporcionó contexto adicional.'}
 
-Genera el análisis ejecutivo ahora. Sé específico con los números. No uses frases genéricas."""
+Genera el informe ahora, siguiendo estrictamente la estructura y las reglas de redacción indicadas."""
 
     try:
-        import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model=ANTHROPIC_MODEL,
@@ -125,49 +120,50 @@ Genera el análisis ejecutivo ahora. Sé específico con los números. No uses f
         )
         return message.content[0].text
 
+    except anthropic.AuthenticationError:
+        return "❌ La API Key es inválida. Verifica que **ANTHROPIC_API_KEY** esté correctamente configurada en los Secrets de Streamlit Cloud."
+    except anthropic.RateLimitError:
+        return "⏳ Se alcanzó el límite de solicitudes a la API. Espera unos minutos e intenta de nuevo."
     except Exception as e:
-        err = str(e)
-        if "authentication" in err.lower() or "api_key" in err.lower():
-            return "❌ API Key inválida. Verifica que sea correcta en los Secrets de Streamlit."
-        elif "rate" in err.lower():
-            return "⏳ Límite de solicitudes alcanzado. Espera un momento e intenta de nuevo."
-        else:
-            return f"❌ Error al conectar con el asistente IA: {err}"
+        return f"❌ Error al conectar con la API de Claude: {str(e)}"
 
 
-def answer_natural_query(df: pd.DataFrame, question: str) -> str:
-    """Responde preguntas en lenguaje natural sobre el dataset."""
-    api_key = _get_api_key()
+def answer_natural_query(
+    df: pd.DataFrame,
+    question: str,
+    api_key: str | None = None,
+) -> str:
+    """
+    Responde preguntas en lenguaje natural sobre el DataFrame.
+    """
     if not api_key:
-        return "⚠️ API Key requerida. Configúrala en los Secrets de Streamlit."
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or _get_streamlit_secret()
+    if not api_key:
+        return "⚠️ Se requiere la API Key para usar las consultas en lenguaje natural."
 
     col_info = []
-    for col in df.columns[:20]:
+    for col in df.columns:
         dtype = str(df[col].dtype)
-        if pd.api.types.is_numeric_dtype(df[col]):
-            sample_info = f"rango [{df[col].min():.1f} - {df[col].max():.1f}], promedio {df[col].mean():.1f}"
-        else:
-            unique_vals = df[col].dropna().unique()[:5].tolist()
-            sample_info = f"valores ejemplo: {unique_vals}"
-        col_info.append(f"  - {col} ({dtype}): {sample_info}")
+        sample = df[col].dropna().head(3).tolist()
+        col_info.append(f"  - {col} (tipo: {dtype}) | ejemplos: {sample}")
 
     schema = "\n".join(col_info)
 
-    system_prompt = """Eres un analista de datos de Procaps. Respondes preguntas sobre datasets 
-de forma clara y directa en español. Cuando sea posible, da números concretos.
-Si no puedes calcular algo exacto con la información disponible, indica cómo se haría."""
+    system_prompt = """Eres un analista de datos experto con dominio del español formal colombiano. \
+Recibirás una pregunta sobre un conjunto de datos y debes responderla de forma clara, \
+profesional y bien redactada. Usa tildes, signos de puntuación correctos y un lenguaje \
+ejecutivo. Si no puedes calcular el resultado exacto con los datos disponibles, \
+explica qué información adicional se necesitaría. Nunca inventes cifras."""
 
-    user_prompt = f"""Dataset con {len(df):,} registros.
+    user_prompt = f"""El conjunto de datos tiene {len(df):,} registros con las siguientes columnas:
 
-Columnas y descripción:
 {schema}
 
-Pregunta: {question}
+Pregunta del usuario: {question}
 
-Responde de forma concisa y útil. Si hay un número específico, dalo."""
+Responde de forma directa, profesional y bien redactada."""
 
     try:
-        import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model=ANTHROPIC_MODEL,
@@ -180,11 +176,8 @@ Responde de forma concisa y útil. Si hay un número específico, dalo."""
         return f"❌ Error: {str(e)}"
 
 
-def _get_api_key() -> str | None:
-    """Lee la API key desde variables de entorno o Streamlit secrets."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key
+def _get_streamlit_secret() -> str | None:
+    """Intenta leer la API key desde Streamlit secrets."""
     try:
         import streamlit as st
         return st.secrets.get("ANTHROPIC_API_KEY")
