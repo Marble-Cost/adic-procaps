@@ -6,16 +6,49 @@ Usa la API de Claude para generar análisis ejecutivos en lenguaje natural.
 from __future__ import annotations
 
 import os
+import time
 import pandas as pd
 import anthropic
 
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+MAX_REINTENTOS = 3
+ESPERA_BASE_SEG = 4
+
+
+def _llamar_claude(client: anthropic.Anthropic, system_prompt: str,
+                   user_prompt: str, max_tokens: int = 1200) -> str:
+    """
+    Llama a Claude con reintentos automáticos si el servidor está saturado (error 529).
+    Espera 4 s → 8 s → 16 s antes de rendirse.
+    """
+    for intento in range(1, MAX_REINTENTOS + 1):
+        try:
+            message = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return message.content[0].text
+
+        except anthropic.APIStatusError as e:
+            if e.status_code == 529 and intento < MAX_REINTENTOS:
+                espera = ESPERA_BASE_SEG * (2 ** (intento - 1))   # 4 s, 8 s, 16 s
+                time.sleep(espera)
+                continue
+            elif e.status_code == 529:
+                return (
+                    "⏳ Los servidores de Anthropic están temporalmente saturados. "
+                    "Espera 1–2 minutos e intenta de nuevo."
+                )
+            raise
+
+    return "⏳ No fue posible obtener respuesta tras varios intentos. Intenta de nuevo en un momento."
 
 
 def _build_data_summary(df: pd.DataFrame) -> str:
     """Construye un resumen estadístico del DataFrame para enviar a Claude."""
-    lines = []
-    lines.append(f"Total de registros: {len(df):,} | Total de columnas: {len(df.columns)}")
+    lines = [f"Total de registros: {len(df):,} | Total de columnas: {len(df.columns)}"]
 
     num_cols = df.select_dtypes(include="number").columns.tolist()
     if num_cols:
@@ -112,13 +145,7 @@ Genera el informe ahora, siguiendo estrictamente la estructura y las reglas de r
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1200,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        return message.content[0].text
+        return _llamar_claude(client, system_prompt, user_prompt, max_tokens=1200)
 
     except anthropic.AuthenticationError:
         return "❌ La API Key es inválida. Verifica que **ANTHROPIC_API_KEY** esté correctamente configurada en los Secrets de Streamlit Cloud."
@@ -165,13 +192,7 @@ Responde de forma directa, profesional y bien redactada."""
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=600,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        return message.content[0].text
+        return _llamar_claude(client, system_prompt, user_prompt, max_tokens=600)
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
