@@ -172,3 +172,36 @@ else:
 with st.expander("📋 Ver tabla de datos filtrados"):
     st.dataframe(df, use_container_width=True)
     st.caption(f"{len(df):,} registros · {len(df.columns)} columnas")
+
+# ── Análisis con IA ───────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### 🤖 Análisis Ejecutivo con IA")
+st.markdown("Claude analiza los datos actuales y genera un resumen ejecutivo en lenguaje natural.")
+
+context_extra = st.text_area(
+    "Contexto adicional (opcional)",
+    placeholder="Ej: 'Reporte de ventas Q1 2025. Meta mensual: $50M COP.'",
+    height=70,
+    key="dashboard_context",
+)
+
+if st.button("🚀 Generar análisis con IA", type="primary", use_container_width=True):
+    try:
+        from modules.ai_narrator import generate_narrative
+        quality_score = st.session_state.get("quality_score") or 0.0
+        source_name = st.session_state.get("source_name", "Dataset")
+        with st.spinner("Claude está analizando tus datos..."):
+            narrative = generate_narrative(
+                df=df,
+                source_name=source_name,
+                quality_score=quality_score,
+                extra_context=context_extra,
+            )
+            st.session_state.narration = narrative
+    except Exception as e:
+        st.error(f"Error al conectar con la IA: {e}")
+
+if st.session_state.get("narration"):
+    st.markdown("#### 📋 Análisis generado")
+    st.markdown(st.session_state.narration)
+    st.success("✅ Narración lista. También disponible en la página de Reporte PDF.")
