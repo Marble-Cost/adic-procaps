@@ -4,7 +4,7 @@ Configuración global — ADIC Platform Procaps
 
 APP_CONFIG = {
     "name": "ADIC Platform",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "company": "Procaps",
     "city": "Barranquilla, Colombia",
 }
@@ -51,6 +51,11 @@ REPORT_TEMPLATES = {
         "icon": "💰",
         "desc": "Presupuesto vs ejecución, centros de costo, variaciones",
         "cols_hint": ["centro_costo", "presupuesto", "ejecucion", "variacion"],
+    },
+    "Gestión de Riesgos": {
+        "icon": "🔍",
+        "desc": "Detección de irregularidades y malas prácticas en transacciones de terceros",
+        "cols_hint": ["tercero", "importe", "fecha", "descripcion"],
     },
     "General (Libre)": {
         "icon": "📋",
