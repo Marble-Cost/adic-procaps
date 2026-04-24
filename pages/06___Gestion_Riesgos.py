@@ -15,67 +15,9 @@ import streamlit as st
 
 from modules.risk_detector import (
     ALERT_SCORES, RISK_COLORS, RISK_DICTIONARY_RAW,
+    INFRACTION_DEFINITIONS, SEVERITY_COLORS,
     run_risk_analysis, get_tercero_summary, get_analysis_stats,
 )
-
-# Definidas localmente para no depender de la versión del módulo
-SEVERITY_COLORS = {
-    "CRÍTICA": "#7C0000",
-    "ALTA":    "#DC2626",
-    "MEDIA":   "#D97706",
-    "BAJA":    "#0057D8",
-}
-
-INFRACTION_DEFINITIONS = [
-    {
-        "id":         "SOBORNO_CRITICO",
-        "nombre":     "Posible Soborno / Cohecho",
-        "icono":      "🤝",
-        "severidad":  "CRÍTICA",
-        "descripcion": "Transacción con precio anómalo Y lenguaje asociado a pagos ilícitos.",
-        "check":      lambda r: r.get("Alerta_Precio") == "SÍ" and r.get("Alerta_Palabra") == "SÍ",
-    },
-    {
-        "id":         "LENGUAJE_SOSPECHOSO",
-        "nombre":     "Lenguaje Sospechoso en Descripción",
-        "icono":      "🔤",
-        "severidad":  "ALTA",
-        "descripcion": "Descripción contiene términos del diccionario de riesgo.",
-        "check":      lambda r: r.get("Alerta_Palabra") == "SÍ" and r.get("Alerta_Precio") != "SÍ",
-    },
-    {
-        "id":         "SOBREPRECIO",
-        "nombre":     "Sobreprecio / Inflación de Costos",
-        "icono":      "💰",
-        "severidad":  "ALTA",
-        "descripcion": "El importe supera en >30% el promedio histórico del tercero.",
-        "check":      lambda r: r.get("Alerta_Precio") == "SÍ" and r.get("Alerta_Palabra") != "SÍ",
-    },
-    {
-        "id":         "TERCERO_FANTASMA",
-        "nombre":     "Tercero No Identificado",
-        "icono":      "👻",
-        "severidad":  "ALTA",
-        "descripcion": "Transacción sin identificación del tercero o sin número de documento.",
-        "check":      lambda r: r.get("Alerta_Identidad") == "SÍ",
-    },
-    {
-        "id":         "EVASION_DOCUMENTAL",
-        "nombre":     "Evasión Documental",
-        "icono":      "📄",
-        "severidad":  "MEDIA",
-        "descripcion": "Descripción insuficiente (<20 caracteres).",
-        "check":      lambda r: r.get("Filtro_Evasion") == "SÍ" and r.get("Alerta_Identidad") != "SÍ",
-    },
-    {
-        "id":         "IRREGULARIDAD_TEMPORAL",
-        "nombre":     "Irregularidad Temporal",
-        "icono":      "⏰",
-        "severidad":  "MEDIA",
-        "descripcion": "Transacción en fin de semana y/o desfase de contabilización >60 días.",
-        "check":      lambda r: r.get("Alerta_Fecha") == "SÍ" or r.get("Alerta_Desfase") == "SÍ",
-    },
-]
 
 # ── Constantes visuales ───────────────────────────────────────────────────────
 _RISK_ORDER  = ["RIESGO ALTO", "RIESGO MEDIO", "RIESGO BAJO", "SIN ALERTA"]
