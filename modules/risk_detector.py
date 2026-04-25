@@ -168,16 +168,14 @@ def _detect_anomalies(df: pd.DataFrame, col_tercero: str, col_importe: str) -> p
         out["Outlier_Estadistico"] = "NO"
 
     # 4. Posible fraccionamiento (≥3 montos casi idénticos ±5% por tercero)
-    def _frac(group):
-        if len(group) < 3:
-            return pd.Series("NO", index=group.index)
-        mu_g = group[col_importe].mean()
-        close = group[col_importe].between(mu_g * 0.95, mu_g * 1.05).sum()
-        flag = "SÍ" if close >= 3 else "NO"
-        return pd.Series(flag, index=group.index)
-
-    frac = df.groupby(col_tercero, group_keys=False).apply(_frac)
-    out["Posible_Fraccionamiento"] = frac.reindex(df.index).fillna("NO")
+    # Vectorizado — compatible con pandas 3.x (sin groupby+apply)
+    _imp = df[col_importe].fillna(0)
+    _ter = df[col_tercero].fillna("__NA__").astype(str)
+    _mu  = _imp.groupby(_ter).transform("mean")
+    _cerca = _imp.between(_mu * 0.95, _mu * 1.05).astype(int)
+    _cnt = _cerca.groupby(_ter).transform("sum")
+    _tam = _ter.groupby(_ter).transform("count")
+    out["Posible_Fraccionamiento"] = ((_cnt >= 3) & (_tam >= 3)).map({True: "SÍ", False: "NO"}).values
 
     return out
 
