@@ -9,23 +9,28 @@ import numpy as np
 from typing import Optional
 
 RISK_DICTIONARY_RAW: list[str] = [
-    "*comis*","*comis0*","*sobor*","*coima*","*grati*","*cortes*",
-    "*atenci*","*regalo*","*ddiva*","*favor*","*promoci*","*incentiv*",
+    # ── Pagos ilícitos ────────────────────────────────────────────────────────
+    "*comis*","*sobor*","*coima*","*grati*","*cortes*",
+    "*atenci*","*regalo*","*dadiva*","*ddiva*","*favor*","*promoci*","*incentiv*",
     "*bonific*","*bono*","*descuent* especi*","*confl* inter*",
     "*intermed*","*agente extern*","*representant* exclu*",
     "*aport* polit*","*donaci*","*filantr*","*patroci*",
-    "*ajust*","*agust*","*ajuzt*","*ajusce*",
+    # ── Ajustes contables ─────────────────────────────────────────────────────
+    # CAMBIO 3: eliminados "*agust*" (typo de *ajust*), "*ajuzt*" y "*ajusce*" (redundantes)
+    "*ajust*",
     "*nota debit*","*nota credit*","*reversi*","*reclasif*",
     "*descuadr*","*diferenci*","*redond*","*balance* ajust*",
     "*provision*","*amortiz*","*depreci*","*inflaci* costo*",
     "*sobreval*","*subfactur*","*sobrefactur*",
     "*dobl* pag*","*anticip* sin contrat*","*desfas*",
+    # ── Urgencias / evasión de control ───────────────────────────────────────
     "*urgent*","*priorit*","*emergenci*","*inmedi*","*excepci*",
     "*sin licitar*","*contrataci* direct*","*sin cotiz*",
     "*por instruccion* de gerenci*","*verbal*","*retroactiv*",
     "*antedatad*","*aprobad* verbal*","*fuera de sistem*",
     "*sin orden de compra*","*sin soporte*",
     "*por favor confirm*","*liberar pag*","*saltar aprob*",
+    # ── Servicios genéricos / descripciones vagas ─────────────────────────────
     "*varios*","*miscelane*","*gestion*",
     "*servici* profes*","*servici* admin*",
     "*apoyo logist*","*apoyo comerci*","*support*",
@@ -34,6 +39,9 @@ RISK_DICTIONARY_RAW: list[str] = [
     "*capacitaci* especial*","*viatico*","*represent*",
     "*relaciones instituc*","*otros gastos*","*caja menor*",
     "*reembolso*","*saldo a favor*",
+    # ── Variantes adicionales — sector farmacéutico / servicios externos ──────
+    "*soporte extern*","*servicio tecnico extern*","*expertise*",
+    "*honorario*","*fee*","*retainer*","*management fee*",
 ]
 
 ALERT_SCORES: dict[str, int] = {
@@ -102,8 +110,23 @@ def _normalize(text: str) -> str:
     t = unicodedata.normalize("NFD", t)
     return "".join(c for c in t if unicodedata.category(c) != "Mn")
 
-_PARSED_DICT = [
-    [_normalize(p) for p in raw.replace("*", " ").split() if p]
+import re as _re
+
+# CAMBIO 3: Compilar el diccionario como expresiones regulares reales.
+# El formato original "*asesor*" usaba split() y buscaba tokens individuales,
+# lo que fallaba con patrones compuestos y no detectaba substrings correctamente.
+# Ahora cada "*" se traduce a ".*" en la regex, y toda la expresión se compila
+# con re.IGNORECASE para robustez.
+def _compile_pattern(raw: str) -> _re.Pattern:
+    # Normalizar el patrón de la misma forma que el texto
+    norm = _normalize(raw)
+    # Convertir wildcards: "*" → ".*", escapar el resto
+    parts = norm.split("*")
+    regex = ".*".join(_re.escape(p) for p in parts)
+    return _re.compile(regex, _re.IGNORECASE)
+
+_COMPILED_PATTERNS: list[tuple[_re.Pattern, str]] = [
+    (_compile_pattern(raw), raw)
     for raw in RISK_DICTIONARY_RAW
 ]
 
@@ -111,9 +134,10 @@ def detect_keyword_in_text(text: str) -> tuple[bool, str]:
     norm = _normalize(text)
     if not norm.strip():
         return False, ""
-    for i, parts in enumerate(_PARSED_DICT):
-        if all(p in norm for p in parts):
-            return True, RISK_DICTIONARY_RAW[i].replace("*", "").strip()
+    # CAMBIO 3: usa las regex compiladas en lugar del check de tokens
+    for pattern, raw in _COMPILED_PATTERNS:
+        if pattern.search(norm):
+            return True, raw.replace("*", "").strip()
     return False, ""
 
 def classify_risk(score: float) -> str:
@@ -122,10 +146,26 @@ def classify_risk(score: float) -> str:
     if score >= 1:  return "RIESGO BAJO"
     return "SIN ALERTA"
 
-def _classify_tercero(max_score: float, freq_pct: float) -> str:
+def _classify_tercero(max_score: float, freq_pct: float, total_txns: int = 0) -> str:
+    """
+    Clasifica el nivel de riesgo de un tercero.
+
+    CAMBIO 2: Se añade el parámetro total_txns para aplicar la regla de escalada
+    por frecuencia solo cuando hay suficientes observaciones (>= MIN_TXNS_FOR_ESCALATION).
+    Con menos registros, el 50% de alertas es estadísticamente insignificante y
+    puede producir escaladas falsas que no son defendibles en un comité de cumplimiento.
+    """
+    MIN_TXNS_FOR_ESCALATION = 5  # Configurable — mínimo para aplicar la regla del 50%
+
     base = classify_risk(max_score)
-    if freq_pct > 50 and base == "RIESGO MEDIO": return "RIESGO ALTO"
-    if freq_pct > 50 and base == "RIESGO BAJO":  return "RIESGO MEDIO"
+
+    # Solo escalar por frecuencia si hay suficiente muestra
+    if total_txns >= MIN_TXNS_FOR_ESCALATION and freq_pct > 50:
+        if base == "RIESGO MEDIO":
+            return "RIESGO ALTO"
+        if base == "RIESGO BAJO":
+            return "RIESGO MEDIO"
+
     return base
 
 def _infraction_label(row: pd.Series) -> str:
@@ -193,16 +233,30 @@ def run_risk_analysis(
 ) -> pd.DataFrame:
     r = df.copy()
 
-    # Promedio histórico por tercero
-    prom = df.groupby(col_tercero)[col_importe].mean().to_dict()
-    r["_prom"] = r[col_tercero].map(prom).fillna(0)
+    # ── CAMBIO 1: Mediana + P90 por tercero (resistente a inflación sostenida) ──
+    # Antes: se usaba .mean(), que se desplaza cuando un tercero infla precios
+    # de forma constante, haciendo que ninguna transacción individual parezca anómala.
+    # Ahora: se usa .median() (resistente a outliers) como referencia base,
+    # y adicionalmente se marca alerta si el importe supera el P90 del tercero.
+    mediana_tercero = df.groupby(col_tercero)[col_importe].median().to_dict()
+    p90_tercero     = df.groupby(col_tercero)[col_importe].quantile(0.90).to_dict()
 
-    # Alerta de precio
-    r["Alerta_Precio"] = (r[col_importe] > r["_prom"] * 1.3).map({True: "SÍ", False: "NO"})
-    r["Desviacion_Vs_Promedio_Pct"] = (
-        ((r[col_importe] - r["_prom"]) / r["_prom"].replace(0, np.nan)) * 100
+    r["_mediana"] = r[col_tercero].map(mediana_tercero).fillna(0)
+    r["_p90"]     = r[col_tercero].map(p90_tercero).fillna(0)
+
+    # Alerta de precio: supera 30% sobre la mediana O supera el P90 del tercero
+    alerta_mediana = r[col_importe] > r["_mediana"] * 1.3
+    alerta_p90     = r[col_importe] > r["_p90"]
+    r["Alerta_Precio"] = (alerta_mediana | alerta_p90).map({True: "SÍ", False: "NO"})
+
+    # Desviación porcentual respecto a la mediana (más interpretable)
+    r["Desviacion_Vs_Mediana_Pct"] = (
+        ((r[col_importe] - r["_mediana"]) / r["_mediana"].replace(0, np.nan)) * 100
     ).round(1)
-    r.drop(columns=["_prom"], inplace=True)
+    # Mantener columna legacy con nombre actualizado para compatibilidad de UI
+    r["Desviacion_Vs_Promedio_Pct"] = r["Desviacion_Vs_Mediana_Pct"]
+
+    r.drop(columns=["_mediana", "_p90"], inplace=True)
 
     # Alerta de palabra + filtro de evasión
     text_cols = [c for c in [col_texto1, col_texto2, col_texto3] if c]
@@ -308,7 +362,13 @@ def get_tercero_summary(result_df: pd.DataFrame, col_importe: str) -> pd.DataFra
     }).reset_index()
 
     s["Frecuencia_Riesgo_Pct"] = (s["Txns_Con_Alerta"] / s["Total_Transacciones"] * 100).round(1)
-    s["Nivel_Riesgo"] = s.apply(lambda r: _classify_tercero(r["Puntaje_Maximo"], r["Frecuencia_Riesgo_Pct"]), axis=1)
+    # CAMBIO 2b: pasar Total_Transacciones para activar el mínimo estadístico
+    s["Nivel_Riesgo"] = s.apply(
+        lambda r: _classify_tercero(r["Puntaje_Maximo"], r["Frecuencia_Riesgo_Pct"], r["Total_Transacciones"]),
+        axis=1,
+    )
+    # Flag de muestra insuficiente — visible en el reporte para el equipo legal
+    s["Muestra_Insuficiente"] = s["Total_Transacciones"].apply(lambda n: "⚠️ Sí (< 5 txns)" if n < 5 else "No")
 
     # Tipos de infracción únicos del tercero
     def _unique_inf(name):
